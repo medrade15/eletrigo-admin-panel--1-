@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Electrician, Product, Service, ElectricianStatus, ServiceStatus, Client, ChatMessage } from './types';
 import { MOCK_ELECTRICIANS, MOCK_PRODUCTS, MOCK_SERVICES, MOCK_CLIENTS } from './constants';
 import { BoltIcon, UserIcon, UsersIcon, BriefcaseIcon, ArrowLeftIcon } from './components/Icons';
@@ -257,6 +257,51 @@ const App: React.FC = () => {
     const [clients, setClients] = useState<Client[]>(MOCK_CLIENTS);
 
     const [notifications, setNotifications] = useState<{id: number, message: string}[]>([]);
+    const channelRef = useRef<BroadcastChannel | null>(null);
+
+    // Initialize services from storage and setup BroadcastChannel listeners
+    useEffect(() => {
+        try {
+            const saved = localStorage.getItem('eletrigo_services');
+            if (saved) {
+                const parsed: Service[] = JSON.parse(saved);
+                // Only hydrate if data looks valid
+                if (Array.isArray(parsed)) {
+                    setServices(parsed);
+                }
+            }
+        } catch {}
+
+        const ch = new BroadcastChannel('eletrigo-services');
+        ch.onmessage = (event) => {
+            const data = event.data;
+            if (!data || typeof data !== 'object') return;
+            if (data.type === 'services_update') {
+                const incoming: Service[] = data.payload;
+                if (Array.isArray(incoming)) {
+                    setServices(incoming);
+                }
+            } else if (data.type === 'notification') {
+                const msg: string = data.payload;
+                if (typeof msg === 'string' && msg) {
+                    addNotification(msg);
+                }
+            }
+        };
+        channelRef.current = ch;
+        return () => {
+            ch.close();
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Persist services and broadcast updates to other tabs
+    useEffect(() => {
+        try {
+            localStorage.setItem('eletrigo_services', JSON.stringify(services));
+        } catch {}
+        channelRef.current?.postMessage({ type: 'services_update', payload: services });
+    }, [services]);
 
     const addNotification = useCallback((message: string) => {
         const id = Date.now();
@@ -315,9 +360,13 @@ const App: React.FC = () => {
     
             if (updatedService) {
                 if (status === ServiceStatus.InProgress) {
-                    addNotification(`O eletricista chegou ao local e iniciou o atendimento.`);
+                    const msg = `O eletricista chegou ao local e iniciou o atendimento.`;
+                    addNotification(msg);
+                    channelRef.current?.postMessage({ type: 'notification', payload: msg });
                 } else if (status === ServiceStatus.Completed) {
-                    addNotification(`Serviço com ${updatedService.electricianName} concluído. Por favor, avalie o serviço.`);
+                    const msg = `Serviço com ${updatedService.electricianName} concluído. Por favor, avalie o serviço.`;
+                    addNotification(msg);
+                    channelRef.current?.postMessage({ type: 'notification', payload: msg });
                 }
             }
             return newServices;
@@ -332,7 +381,9 @@ const App: React.FC = () => {
             electricianName,
             eta,
         } : s))
-        addNotification(`Seu serviço foi aceito! ${electricianName} está a caminho.`);
+        const msg = `Seu serviço foi aceito! ${electricianName} está a caminho.`;
+        addNotification(msg);
+        channelRef.current?.postMessage({ type: 'notification', payload: msg });
     }, [addNotification]);
     
     const handleRequestService = useCallback((serviceData: Omit<Service, 'id' | 'value'>) => {
@@ -345,14 +396,21 @@ const App: React.FC = () => {
         setServices(prev => [newService, ...prev]);
         
         if (serviceData.serviceType === 'Emergencial') {
-             addNotification('Sua solicitação foi enviada aos eletricistas próximos!');
+             const msg = 'Sua solicitação foi enviada aos eletricistas próximos!';
+             addNotification(msg);
+             channelRef.current?.postMessage({ type: 'notification', payload: msg });
         } else {
-            addNotification('Seu agendamento foi solicitado com sucesso!');
+            const msg = 'Seu agendamento foi solicitado com sucesso!';
+            addNotification(msg);
+            channelRef.current?.postMessage({ type: 'notification', payload: msg });
         }
     }, [addNotification]);
 
     const handleCancelService = useCallback((serviceId: string) => {
         setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: ServiceStatus.Cancelled } : s));
+        const msg = 'Serviço cancelado com sucesso.';
+        addNotification(msg);
+        channelRef.current?.postMessage({ type: 'notification', payload: msg });
     }, []);
 
     const handleSendMessage = useCallback((serviceId: string, sender: 'client' | 'electrician', message: string) => {
@@ -367,9 +425,13 @@ const App: React.FC = () => {
                 
                 if (sender === 'client') {
                     const client = clients.find(c => c.name === s.clientName);
-                    addNotification(`Nova mensagem de ${client?.name.split(' ')[0] || 'Cliente'}`);
+                    const msg = `Nova mensagem de ${client?.name.split(' ')[0] || 'Cliente'}`;
+                    addNotification(msg);
+                    channelRef.current?.postMessage({ type: 'notification', payload: msg });
                 } else {
-                     addNotification(`Nova mensagem de ${s.electricianName}`);
+                     const msg = `Nova mensagem de ${s.electricianName}`;
+                     addNotification(msg);
+                     channelRef.current?.postMessage({ type: 'notification', payload: msg });
                 }
                 
                 return { ...s, chat };
